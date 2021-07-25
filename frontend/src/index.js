@@ -4,6 +4,10 @@ import './index.css';
 import App from './App';
 import reportWebVitals from './reportWebVitals';
 
+if (typeof window.ethereum !== 'undefined') {
+  console.log('MetaMask is installed!');
+}
+
 ReactDOM.render(
   <React.StrictMode>
     <App />

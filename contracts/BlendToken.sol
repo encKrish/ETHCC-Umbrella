@@ -3,6 +3,7 @@ pragma solidity >=0.4.22 <0.9.0;
 pragma experimental ABIEncoderV2;
 
 // !!! Only works on Ropsten
+// TODO USDC has only 6 decimals, will need to change a lot of code
 
 // include Chain interface from Umbrella SDK
 import "@umb-network/toolbox/dist/contracts/IChain.sol";
@@ -16,7 +17,8 @@ import {ERC20Burnable} from "@openzeppelin/contracts/token/ERC20/extensions/ERC2
 contract BlendToken is ERC20, ERC20Burnable {
     using ValueDecoder for bytes;
 
-    event newBlendCreated(bytes32 tokenA, bytes32 tokenB, uint8 pricingMode, address contractAdx);
+    event newBlendCreated(bytes32 tokenA, bytes32 tokenB, uint8 pricingMode, uint _shareA, address contractAdx);
+    // TODO L2 Data cannot be accessed on chain, so emit events for the user to verify
 
     // registry wit all contract addresses, most important is `Chain`
     IRegistry public registry;
@@ -56,7 +58,7 @@ contract BlendToken is ERC20, ERC20Burnable {
                 address _registry
     ) ERC20(_name, _name) {
         require(_registry != address(0x0), "_registry is empty");
-        require((shareA > 0) && (shareA < 10000), "share percent out of bounds");
+        require((_shareA > 0) && (_shareA < 10000), "share percent out of bounds");
 
         registry = IRegistry(_registry);
         chain = IChain(registry.requireAndGetAddress("Chain"));
@@ -66,7 +68,7 @@ contract BlendToken is ERC20, ERC20Burnable {
         pricingMode = _pricingMode;
         shareA = _shareA;
         
-        emit newBlendCreated(_tokenA, _tokenB, _pricingMode, address(this));
+        emit newBlendCreated(_tokenA, _tokenB, _pricingMode, shareA, address(this));
     }
 
     function getPriceOfUnderlying(bytes32 _key) public view returns (uint256) {
@@ -109,11 +111,19 @@ contract BlendToken is ERC20, ERC20Burnable {
     //********************************************************
     // Transaction functions
     //********************************************************
+    function getTransferrableAmount(address reciever) public view returns(uint amountToTransfer, uint approvedAmount) {
+        approvedAmount = USDC.allowance(reciever, address(this));
+        amountToTransfer = (approvedAmount * 10**decimals()) / getPrice();
+        if (pricingMode == 2) {
+            amountToTransfer = (approvedAmount * 10**(2 * decimals())) / getPrice();
+        }
 
-    function mintBlendTokens(address reciever) public {
-        uint approvedAmount = USDC.allowance(reciever, address(this));
+        return (amountToTransfer, approvedAmount);
+    } 
+
+    function _mintBlendTokens(address reciever) private {
+        (uint amountToTransfer, uint approvedAmount) = getTransferrableAmount(reciever);
         USDC.transferFrom(reciever, FEE_RECIEVER, approvedAmount);
-        uint amountToTransfer = (approvedAmount * 10**decimals()) / getPrice();
 
         _mint(reciever, amountToTransfer);
     }
@@ -125,30 +135,44 @@ contract BlendToken is ERC20, ERC20Burnable {
         else return true;
     }
 
-    function buyBlendTokensFromPool(address reciever, uint amount) public {
-        // Only execute after checking sellersAvailable()
-        for(uint i = currSellerIdx; i <= totalSellers; i++) {
-
+    function _buyBlendTokensFromPool(address reciever, uint amount) private {
+        // ! Only execute after checking sellersAvailable()
+        while(currSellerIdx <= totalSellers) {
+            address seller = mapSellers[currSellerIdx].adx;
             uint remAmount = mapSellers[currSellerIdx].remAmount;
             uint iterAmount = amount < remAmount ? amount : remAmount;
+
+            // Transfer Blend tokens from seller to reciever
             transferFrom(mapSellers[currSellerIdx].adx, reciever, iterAmount);
-            
-            if (iterAmount < remAmount) 
+
+            // Transfer USDC to from reciever to seller
+            USDC.transferFrom(reciever, seller, (getPrice() * amount)/10**decimals());
+
+            mapSellers[currSellerIdx].remAmount -= iterAmount;
+            amount -= iterAmount;
+
+            if (mapSellers[currSellerIdx].remAmount <= 0) 
                 currSellerIdx++;
 
-            amount -= iterAmount;
-            mapSellers[currSellerIdx].remAmount -= iterAmount;
-            
             if (amount <= 0)
                 break;
         }
 
         if (amount > 0) 
-            mintBlendTokens(reciever);
+            _mintBlendTokens(reciever);
+    }
+
+    function buyBlendTokens(address reciever) public {
+        (uint amountToTransfer, ) = getTransferrableAmount(reciever);
+
+        if (sellersAvailable()) {
+            _buyBlendTokensFromPool(reciever, amountToTransfer);
+        } else _mintBlendTokens(reciever);
     }
 
     function sellToPool(address sender, uint amount) public {
-        approve(sender, amount);
+        // TODO Check approve once
+        _approve(sender, address(this), amount);
         totalSellers++;
         mapSellers[totalSellers] = TokenSellers(sender, amount, amount);
     }

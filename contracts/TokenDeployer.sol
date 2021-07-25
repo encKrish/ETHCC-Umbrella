@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: MIT
 pragma solidity >=0.4.22 <0.9.0;
 
-
 import {BlendToken} from "./BlendToken.sol";
 
 contract TokenDeployer {
@@ -27,6 +26,13 @@ contract TokenDeployer {
 
         BlendToken token = new BlendToken(string(_id), _tokenA, _tokenB, _pricingMode, shareA, registry);
         hashToContract[keccak256(_id)] = address(token);
+    }
+
+    function tokenPairExists(bytes memory _id) public view returns(bool) {
+        address contractAdx = hashToContract[keccak256(_id)];
+        if (contractAdx == address(0x0)) {
+            return false;
+        } else return true;
     }
 
 
